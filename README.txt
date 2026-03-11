@@ -1,4 +1,4 @@
-NAVIGATOR V7C Data Pack
+NAVIGATOR V8.3 Data Pack
 
 Included
 - data/standing_rules.json
