@@ -1,102 +1,178 @@
 export function normaliseText(input) {
-  return String(input || '')
+  return String(input || "")
     .toLowerCase()
-    .replace(/\s+/g, ' ')
+    .replace(/\s+/g, " ")
     .trim();
 }
 
-export function containsAny(text, keywords) {
+function containsAny(text, keywords = []) {
   return keywords.some((keyword) => text.includes(keyword));
 }
 
-export function detectFormType({ filename = '', documentText = '' }) {
+function countMatches(text, keywords = []) {
+  return keywords.reduce((count, keyword) => {
+    return count + (text.includes(keyword) ? 1 : 0);
+  }, 0);
+}
+
+export function detectFormType({ filename = "", documentText = "" } = {}) {
   const file = normaliseText(filename);
   const doc = normaliseText(documentText);
   const combined = `${file} ${doc}`.trim();
 
-  const candidates = [
-    {
-      formType: 'academic_dismissal_appeal',
-      reference: 'ROF-05 Academic Dismissal Appeal Form',
-      confidence: 0.9,
-      keywords: [
-        'academic dismissal appeal form',
-        'rof-05',
-        'dismissal appeal',
-        'reason for appeal',
-        'academic advisor',
-        'semester results',
-        'supporting evidence'
-      ]
-    },
-    {
-      formType: 'course_withdrawal',
-      reference: 'Course Withdrawal Form',
-      confidence: 0.82,
-      keywords: [
-        'course withdrawal',
-        'withdraw from course',
-        'w grade',
-        'withdrawal form',
-        'subject withdrawal'
-      ]
-    },
-    {
-      formType: 'postponement_of_studies',
-      reference: 'Application for Postponement of Studies',
-      confidence: 0.82,
-      keywords: [
-        'postponement of studies',
-        'postpone studies',
-        'deferment',
-        'defer studies',
-        'academic office',
-        'vice president academic'
-      ]
-    }
+  const dismissalTitleKeywords = [
+    "academic dismissal appeal form",
+    "dismissal appeal form",
+    "appeal after academic dismissal"
   ];
 
-  let best = {
-    formType: 'unknown_form',
-    reference: 'Academic Form',
-    confidence: 0.4,
+  const dismissalCodeKeywords = [
+    "rof-05",
+    "rof 05"
+  ];
+
+  const dismissalFieldKeywords = [
+    "reason for appeal",
+    "academic advisor",
+    "semester results",
+    "supporting documents",
+    "supporting evidence",
+    "academic plan",
+    "dismissal",
+    "appeal",
+    "faculty academic office"
+  ];
+
+  const withdrawalTitleKeywords = [
+    "course withdrawal form",
+    "withdrawal from course",
+    "withdrawal from course or courses"
+  ];
+
+  const withdrawalFieldKeywords = [
+    "reason for withdrawal",
+    "course code",
+    "course title",
+    "w grade",
+    "withdrawal",
+    "subject withdrawal"
+  ];
+
+  const postponementTitleKeywords = [
+    "application for postponement of studies",
+    "postponement of studies",
+    "deferment of studies",
+    "application for deferment"
+  ];
+
+  const postponementFieldKeywords = [
+    "reason for postponement",
+    "reason for deferment",
+    "semester to postpone",
+    "semester to defer",
+    "postponement",
+    "deferment",
+    "dean approval",
+    "vice president academic"
+  ];
+
+  const genericFormKeywords = [
+    "student id",
+    "signature",
+    "date",
+    "programme",
+    "faculty",
+    "form"
+  ];
+
+  const dismissalScore =
+    countMatches(combined, dismissalTitleKeywords) * 4 +
+    countMatches(combined, dismissalCodeKeywords) * 5 +
+    countMatches(combined, dismissalFieldKeywords) * 2;
+
+  const withdrawalScore =
+    countMatches(combined, withdrawalTitleKeywords) * 4 +
+    countMatches(combined, withdrawalFieldKeywords) * 2;
+
+  const postponementScore =
+    countMatches(combined, postponementTitleKeywords) * 4 +
+    countMatches(combined, postponementFieldKeywords) * 2;
+
+  const genericFormScore = countMatches(combined, genericFormKeywords);
+
+  let result = {
+    formType: "unknown_form",
+    confidence: 0.35,
     signals: []
   };
 
-  for (const candidate of candidates) {
-    const hits = candidate.keywords.filter((keyword) => combined.includes(keyword));
-    if (hits.length > best.signals.length) {
-      best = {
-        formType: candidate.formType,
-        reference: candidate.reference,
-        confidence: Math.min(candidate.confidence, 0.45 + hits.length * 0.12),
-        signals: hits
-      };
+  if (dismissalScore >= 5 && dismissalScore >= withdrawalScore && dismissalScore >= postponementScore) {
+    result = {
+      formType: "academic_dismissal_appeal",
+      confidence: dismissalScore >= 9 ? 0.92 : 0.78,
+      signals: []
+    };
+
+    if (containsAny(combined, dismissalTitleKeywords)) {
+      result.signals.push("dismissal appeal title detected");
     }
+    if (containsAny(combined, dismissalCodeKeywords)) {
+      result.signals.push("ROF-05 detected");
+    }
+    dismissalFieldKeywords.forEach((keyword) => {
+      if (combined.includes(keyword)) {
+        result.signals.push(`${keyword} detected`);
+      }
+    });
+
+    return result;
   }
 
-  if (best.formType !== 'unknown_form') {
-    return best;
+  if (withdrawalScore >= 5 && withdrawalScore >= postponementScore) {
+    result = {
+      formType: "course_withdrawal",
+      confidence: withdrawalScore >= 8 ? 0.9 : 0.74,
+      signals: []
+    };
+
+    if (containsAny(combined, withdrawalTitleKeywords)) {
+      result.signals.push("course withdrawal title detected");
+    }
+    withdrawalFieldKeywords.forEach((keyword) => {
+      if (combined.includes(keyword)) {
+        result.signals.push(`${keyword} detected`);
+      }
+    });
+
+    return result;
   }
 
-  const genericFormSignals = [
-    'student id',
-    'signature',
-    'date',
-    'programme',
-    'reason',
-    'supporting documents',
-    'faculty academic office'
-  ].filter((keyword) => combined.includes(keyword));
+  if (postponementScore >= 5) {
+    result = {
+      formType: "postponement_of_studies",
+      confidence: postponementScore >= 8 ? 0.9 : 0.74,
+      signals: []
+    };
 
-  if (genericFormSignals.length >= 2) {
+    if (containsAny(combined, postponementTitleKeywords)) {
+      result.signals.push("postponement title detected");
+    }
+    postponementFieldKeywords.forEach((keyword) => {
+      if (combined.includes(keyword)) {
+        result.signals.push(`${keyword} detected`);
+      }
+    });
+
+    return result;
+  }
+
+  if (genericFormScore >= 3) {
     return {
-      formType: 'unknown_form',
-      reference: 'Academic Form',
-      confidence: 0.58,
-      signals: genericFormSignals
+      formType: "unknown_form",
+      confidence: 0.52,
+      signals: genericFormKeywords.filter((keyword) => combined.includes(keyword)).map((keyword) => `${keyword} detected`)
     };
   }
 
-  return best;
+  return result;
 }
