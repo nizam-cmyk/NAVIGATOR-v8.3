@@ -56,20 +56,42 @@ export default async function handler(req, res) {
     const detectedCgpa = extractCgpa(`${text} ${documentText}`.trim());
     const detectedCredits = extractCredits(`${text} ${documentText}`.trim());
 
-    const freshContext = buildSessionContext({
-      currentMode: null,
-      fileMeta,
-      classification,
-      formDetection: detectedForm,
-      programme: detectedProgramme,
-      cgpa: detectedCgpa,
-      credits: detectedCredits,
-      reference: detectedForm?.reference || detectedProgramme?.handbook_reference || null
-    });
+    const enrichedClassification = {
+      ...(classification || {}),
+      formType: detectedForm?.formType || classification?.formType || null
+    };
 
-    let sessionContext = mergeContext(incomingSessionContext, freshContext);
-    const mode = detectMode(text, fileMeta, classification, sessionContext);
-    sessionContext = { ...sessionContext, current_mode: mode };
+    let sessionContext = mergeContext(
+      incomingSessionContext,
+      buildSessionContext({
+        previousContext: incomingSessionContext,
+        mode: 'general',
+        fileMeta,
+        classification: enrichedClassification,
+        extracted,
+        programme: detectedProgramme,
+        cgpa: detectedCgpa,
+        credits: detectedCredits,
+        reference: detectedForm?.reference || detectedProgramme?.handbook_reference || null
+      })
+    );
+
+    const mode = detectMode(text, fileMeta, enrichedClassification, sessionContext);
+
+    sessionContext = mergeContext(
+      sessionContext,
+      buildSessionContext({
+        previousContext: sessionContext,
+        mode,
+        fileMeta,
+        classification: enrichedClassification,
+        extracted,
+        programme: detectedProgramme,
+        cgpa: detectedCgpa,
+        credits: detectedCredits,
+        reference: detectedForm?.reference || detectedProgramme?.handbook_reference || sessionContext?.last_reference || null
+      })
+    );
 
     let reply = '';
     switch (mode) {
@@ -97,7 +119,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       mode,
-      classification,
+      classification: enrichedClassification,
       sessionContext,
       reply
     });
@@ -254,8 +276,11 @@ function getFormResponse(messageText, documentText, formsData, handbookSections,
     matchKnownForm(forms, sessionContext?.last_form_type) ||
     forms.find((form) => containsFormSignal(combined, form));
 
+  const prettyFormType = formatFormType(sessionContext?.last_form_type);
+  const detectedReference = sessionContext?.last_reference || null;
+
   if (!matchedForm) {
-    return `NAVIGATOR · form\n\nIssue Summary:\nI could read this as a form-like academic document, but I am not yet fully confident about the exact form type.\n\nRecommended Action:\n1. Tell me the form title if visible.\n2. Tell me whether this is for dismissal appeal, withdrawal, or postponement.\n3. I will then continue using this same case context.\n\nReference:\nAcademic Forms and Procedures`;
+    return `NAVIGATOR · form\n\nIssue Summary:\nI could read this as a form-like academic document, but I am not yet fully confident about the exact form type.\n\nDetected Form Type:\n${prettyFormType || 'Unknown academic form'}\n\nWhat I detected:\n- Last document type: ${sessionContext?.last_document_type || 'unknown'}\n- Last uploaded file: ${sessionContext?.last_uploaded_filename || 'not available'}\n- Reference clue: ${detectedReference || 'not yet available'}\n\nRecommended Action:\n1. Tell me the form title if visible.\n2. Tell me whether this is for dismissal appeal, withdrawal, or postponement.\n3. I will then continue using this same case context.\n\nReference:\n${detectedReference || 'Academic Forms and Procedures'}`;
   }
 
   const fields = (matchedForm.required_fields || []).map((item) => `- ${item}`).join('\n');
@@ -266,7 +291,22 @@ function getFormResponse(messageText, documentText, formsData, handbookSections,
     ? matchedForm.submit_to.join(', ')
     : 'Please refer to the official form instructions.';
 
-  return `NAVIGATOR · form\n\nForm Identified:\n${matchedForm.form_name}${matchedForm.form_code ? ` (${matchedForm.form_code})` : ''}\n\nPurpose:\n${matchedForm.purpose || 'Not specified.'}\n\nFields / Information to Prepare:\n${fields || '- Please refer to the official form.'}\n\nAttachments Required:\n${attachments}\n\nSubmission Guidance:\n1. Complete all required fields accurately.\n2. Attach all supporting documents.\n3. Submit to: ${submitTo}\n4. Follow the official deadline stated in the form or handbook.\n\nDeadline:\n${matchedForm.submission_deadline || matchedForm.submission_window || matchedForm.deadline_limit || 'Please confirm from the official document.'}\n\nImportant Caution:\nLate or incomplete submission may affect processing.\n\nAdditional Note:\n${matchedForm.post_approval_note || 'Final processing must follow the official Faculty / Registrar workflow.'}\n\nReference:\n${matchedForm.reference || matchedForm.form_name}`;
+  const detectedLine = sessionContext?.last_form_type
+    ? `Detected Form Type:\n${prettyFormType}\n\n`
+    : '';
+
+  return `NAVIGATOR · form\n\n${detectedLine}Form Identified:\n${matchedForm.form_name}${matchedForm.form_code ? ` (${matchedForm.form_code})` : ''}\n\nPurpose:\n${matchedForm.purpose || 'Not specified.'}\n\nFields / Information to Prepare:\n${fields || '- Please refer to the official form.'}\n\nAttachments Required:\n${attachments}\n\nSubmission Guidance:\n1. Complete all required fields accurately.\n2. Attach all supporting documents.\n3. Submit to: ${submitTo}\n4. Follow the official deadline stated in the form or handbook.\n\nDeadline:\n${matchedForm.submission_deadline || matchedForm.submission_window || matchedForm.deadline_limit || 'Please confirm from the official document.'}\n\nImportant Caution:\nLate or incomplete submission may affect processing.\n\nAdditional Note:\n${matchedForm.post_approval_note || 'Final processing must follow the official Faculty / Registrar workflow.'}\n\nReference:\n${matchedForm.reference || matchedForm.form_name}`;
+}
+
+function containsFormSignalfunction formatFormType(formType) {
+  if (!formType) return '';
+  const map = {
+    academic_dismissal_appeal: 'Academic Dismissal Appeal Form',
+    course_withdrawal: 'Course Withdrawal Form',
+    postponement_of_studies: 'Application for Postponement of Studies',
+    unknown_form: 'Unknown academic form'
+  };
+  return map[formType] || String(formType).replace(/_/g, ' ');
 }
 
 function containsFormSignal(combinedText, form) {
